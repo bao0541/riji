@@ -29,7 +29,7 @@
 
 ## 安装到安卓手机
 
-1. 从 [GitHub Releases](https://github.com/bao0541/riji/releases) 下载最新 APK（或使用本地构建产生的 `dist/日计-v1.5.0.apk`），传到手机（数据线、微信文件传输、网盘均可）。
+1. 从 [GitHub Releases](https://github.com/bao0541/riji/releases) 下载最新 APK（或使用本地构建产生的 `dist/riji-v1.5.0.apk`），传到手机（数据线、微信文件传输、网盘均可）。
 2. 在手机上点开 APK。
 3. 如果系统提示“不允许安装未知来源应用”，按提示允许当前文件管理器 / 浏览器安装。
 4. 如出现 Play Protect 提示，选择“仍要安装”。这是个人签名包，不在应用商店上架。
