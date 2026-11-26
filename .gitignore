@@ -1,0 +1,14 @@
+# Build outputs
+build/
+dist/
+
+# Local signing key — never commit this
+debug.keystore
+*.jks
+*.keystore
+
+# Local test artifacts
+ui-test/
+*.log
+.DS_Store
+Thumbs.db
