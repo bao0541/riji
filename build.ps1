@@ -102,7 +102,7 @@ if (-not (Test-Path $keystore)) {
         -storepass riji2026 -keypass riji2026 -dname "CN=RiJi, OU=Personal, O=RiJi, L=Shanghai, ST=Shanghai, C=CN"
     if ($LASTEXITCODE -ne 0) { throw "keytool failed" }
 }
-$outApk = Join-Path $Dist "riji-v1.4.0.apk"
+$outApk = Join-Path $Dist "riji-v1.5.0.apk"
 if (Test-Path $outApk) { Remove-Item -Force $outApk }
 & $Apksigner sign --ks $keystore --ks-key-alias riji --ks-pass pass:riji2026 --key-pass pass:riji2026 --out $outApk $aligned
 if ($LASTEXITCODE -ne 0) { throw "apksigner sign failed" }

@@ -2,7 +2,7 @@
   'use strict';
 
   var STORAGE_KEY = 'riji.data.v1';
-  var APP_VERSION = '1.4.0';
+  var APP_VERSION = '1.5.0';
   var storageMigrated = false;
   var TYPES = {
     item: {
@@ -21,9 +21,9 @@
       desc: '房租保险等'
     },
     income: {
-      label: '收入', short: '收入', action: '按期记录',
+      label: '收入', short: '收入', action: '逐笔记录',
       icon: 'i-wallet', color: '#a27616', soft: '#f4ecd5',
-      desc: '工资等稳定收入'
+      desc: '工资等，按次记录'
     }
   };
   var CYCLES = {
@@ -59,6 +59,7 @@
     analysisChartType: 'line',
     breakdownScope: 'all',
     billChartMode: 'entry',
+    incomeChartMode: 'month',
     recurringChartMode: 'cumulative',
     overlays: [],
     detailId: null,
@@ -420,13 +421,15 @@
       } else if (p.type === 'bill') {
         base.cycle = BILL_CYCLES[p.cycle] ? p.cycle : 'month';
         base.entries = normalizeEntries(p.entries);
-      } else {
+      } else if (p.type === 'fixed') {
         base.amount = safeAmount(p.amount);
         base.startDate = validISO(p.startDate) ? p.startDate : todayISO();
         base.cycle = CYCLES[p.cycle] ? p.cycle : 'month';
         base.entries = normalizeEntries(p.entries);
-        if (p.type === 'income') base.incomeKind = p.incomeKind === 'other' ? 'other' : 'salary';
         if (base.amount <= 0) return;
+      } else {
+        base.incomeKind = p.incomeKind === 'other' ? 'other' : 'salary';
+        base.entries = normalizeEntries(p.entries);
       }
       out.projects.push(base);
     });
@@ -505,16 +508,19 @@
     var entries = (p.entries || []).slice().sort(function (a, b) { return a.date.localeCompare(b.date); });
     var total = round2(entries.reduce(function (s, e) { return s + e.amount; }, 0));
     var latest = entries.length ? entries[entries.length - 1] : null;
-    if (p.type === 'bill') {
+    if (p.type === 'bill' || p.type === 'income') {
       var months = {};
       entries.forEach(function (e) { months[e.date.slice(0, 7)] = true; });
       var monthCount = Object.keys(months).length;
       var monthlyAvg = total / Math.max(1, monthCount);
-      return {
-        kind: 'bill', total: total, count: entries.length, latest: latest,
-        months: monthCount, monthlyAvg: monthlyAvg,
-        dailyAvg: monthlyAvg / 30.44
+      var first = entries.length ? entries[0] : null;
+      var st = {
+        kind: p.type, total: total, count: entries.length, latest: latest,
+        first: first, months: monthCount, monthlyAvg: monthlyAvg,
+        elapsed: first ? elapsedText(first.date) : '尚未开始'
       };
+      if (p.type === 'bill') st.dailyAvg = monthlyAvg / 30.44;
+      return st;
     }
     var periods = periodsElapsed(p);
     var expected = round2(periods * p.amount);
@@ -766,21 +772,31 @@
         : '还没有记录';
       badge = '日均 ' + money(st.dailyAvg);
       spark = sparkValues(p, st);
-    } else {
+    } else if (p.type === 'fixed') {
       value = money(st.actual);
-      unit = p.type === 'income' ? '累计收入' : '已投入';
+      unit = '已投入';
       sub = '已进行 <b>' + st.periods + ' 期</b> · ' + (st.periods ? '已持续 ' + st.elapsed : '尚未开始');
       if (!st.count && st.periods) {
-        badge = '应' + (p.type === 'income' ? '收' : '投入') + ' ' + money(st.expected);
+        badge = '应投入 ' + money(st.expected);
       } else if (st.missing) {
         badge = '待记 ' + st.missing + ' 期';
       } else {
         badge = '每期 ' + money(p.amount);
       }
       spark = sparkValues(p, st);
+    } else {
+      value = money(st.total);
+      unit = '累计收入';
+      sub = st.count ? (st.count + ' 笔 · 已持续 ' + st.elapsed) : '还没有收入记录';
+      badge = st.latest ? '最近 ' + money(st.latest.amount) : '待记录';
+      spark = sparkValues(p, st);
     }
+    var metaDetail = p.type === 'item' ? '按天分摊'
+      : p.type === 'bill' ? BILL_CYCLES[p.cycle]
+      : p.type === 'fixed' ? cycleText(p.cycle)
+      : (p.incomeKind === 'other' ? '其他收入' : '工资');
     var meta = '<span class="type-label">' + t.label + '</span>' +
-      '<span class="meta-dot"></span><span>' + (p.type === 'item' ? '按天分摊' : p.type === 'bill' ? BILL_CYCLES[p.cycle] : cycleText(p.cycle)) + '</span>';
+      '<span class="meta-dot"></span><span>' + metaDetail + '</span>';
     return '<button class="project-card" type="button" data-action="open-detail" data-id="' + esc(p.id) + '" style="' + typeVars(p.type) + '">' +
       '<div class="project-top">' +
         '<span class="type-icon">' + icon(t.icon) + '</span>' +
@@ -1373,6 +1389,30 @@
     return lineChartSVG([{ points: points, color: TYPES.bill.color, fill: true }], { autoRange: true });
   }
 
+  function incomeChartHTML(p, mode) {
+    var entries = (p.entries || []).slice().sort(function (a, b) { return a.date.localeCompare(b.date); });
+    if (!entries.length) {
+      return '<div class="chart-empty">还没有收入记录<br>每次到账后记一笔，金额可以有差异</div>';
+    }
+    if (mode === 'cumulative') {
+      var sum = 0;
+      var points = entries.map(function (e) {
+        sum += e.amount;
+        return { date: e.date, value: round2(sum) };
+      });
+      return lineChartSVG([{ points: points, color: TYPES.income.color, fill: true, dots: true }], { autoRange: true });
+    }
+    var map = {};
+    entries.forEach(function (e) {
+      var k = monthKey(e.date);
+      map[k] = (map[k] || 0) + e.amount;
+    });
+    var cats = Object.keys(map).sort().map(function (k) {
+      return { label: k.slice(2).replace('-', '/'), values: [round2(map[k])] };
+    });
+    return barChartSVG(cats, { colors: [TYPES.income.color], autoRange: true, hideZeroBars: true });
+  }
+
   function recurringChartHTML(p, mode) {
     var entries = (p.entries || []).slice().sort(function (a, b) { return a.date.localeCompare(b.date); });
     var st = projectStats(p);
@@ -1501,9 +1541,9 @@
       heroUnit = '期';
       heroFoot = '<span>已投入 <b>' + money(st.actual) + '</b></span><span>应投入 <b>' + money(st.expected) + '</b></span>';
     } else {
-      heroBig = money(st.actual);
+      heroBig = money(st.total);
       heroUnit = '累计收入';
-      heroFoot = '<span><b>' + st.count + '</b> 笔记录</span><span>应收 <b>' + money(st.expected) + '</b></span>';
+      heroFoot = '<span><b>' + st.count + '</b> 笔记录</span><span>最近 <b>' + (st.latest ? shortDate(st.latest.date) : '暂无') + '</b></span>';
     }
 
     if (p.type === 'item') {
@@ -1527,26 +1567,37 @@
       chartHtml = billChartHTML(p, ui.billChartMode);
       chartNote = '<div class="mini-note">' + icon('i-info') + '<span>逐笔看每次波动，按月看整体趋势。纵轴从最近整数起，不从 0 开始，方便看出金额波动。</span></div>';
       toggleHtml = '<div class="segmented"><button type="button" data-action="bill-chart-mode" data-mode="entry" class="' + (ui.billChartMode === 'entry' ? 'active' : '') + '">逐笔</button><button type="button" data-action="bill-chart-mode" data-mode="month" class="' + (ui.billChartMode === 'month' ? 'active' : '') + '">按月</button></div>';
-    } else {
+    } else if (p.type === 'fixed') {
       statsHtml =
         '<div class="detail-stat"><div class="k">每期金额</div><div class="v">' + money(p.amount) + '</div></div>' +
-        '<div class="detail-stat"><div class="k">' + (isIncome ? '应收' : '应投入') + '</div><div class="v">' + money(st.expected) + '</div></div>' +
-        '<div class="detail-stat"><div class="k">' + (isIncome ? '已收入' : '已记录') + '</div><div class="v">' + money(st.actual) + '</div></div>' +
+        '<div class="detail-stat"><div class="k">应投入</div><div class="v">' + money(st.expected) + '</div></div>' +
+        '<div class="detail-stat"><div class="k">已记录</div><div class="v">' + money(st.actual) + '</div></div>' +
         '<div class="detail-stat"><div class="k">已持续</div><div class="v" style="font-size:14px">' + (st.periods ? st.elapsed : '未开始') + '</div></div>';
       chartTitle = '累计记录';
       chartSub = '虚线为计划，实线为实际';
       chartHtml = recurringChartHTML(p, ui.recurringChartMode);
-      chartNote = '<div class="mini-note">' + icon('i-info') + '<span>' + (isIncome ? '收入' : '支出') + '按实际记录累计；虚线按每期金额生成，只作对照。' + (st.missing ? '仍有 ' + st.missing + ' 期未记录。' : '') + '</span></div>';
+      chartNote = '<div class="mini-note">' + icon('i-info') + '<span>支出按实际记录累计；虚线按每期金额生成，只作对照。' + (st.missing ? '仍有 ' + st.missing + ' 期未记录。' : '') + '</span></div>';
       toggleHtml = '<div class="segmented"><button type="button" data-action="recurring-chart-mode" data-mode="cumulative" class="' + (ui.recurringChartMode === 'cumulative' ? 'active' : '') + '">累计</button><button type="button" data-action="recurring-chart-mode" data-mode="period" class="' + (ui.recurringChartMode === 'period' ? 'active' : '') + '">每期</button></div>';
+    } else {
+      statsHtml =
+        '<div class="detail-stat"><div class="k">累计收入</div><div class="v">' + money(st.total) + '</div></div>' +
+        '<div class="detail-stat"><div class="k">记录笔数</div><div class="v">' + st.count + ' <small>笔</small></div></div>' +
+        '<div class="detail-stat"><div class="k">最近一次</div><div class="v" style="font-size:14px">' + (st.latest ? shortDate(st.latest.date) : '暂无') + '</div></div>' +
+        '<div class="detail-stat"><div class="k">月均收入</div><div class="v">' + money(st.monthlyAvg) + '</div></div>';
+      chartTitle = '收入走势';
+      chartSub = '按实际到账记录';
+      chartHtml = incomeChartHTML(p, ui.incomeChartMode);
+      chartNote = '<div class="mini-note">' + icon('i-info') + '<span>每月到账金额可以不同；按月看差异，累计看总收入变化。纵轴从非零数据附近开始。</span></div>';
+      toggleHtml = '<div class="segmented"><button type="button" data-action="income-chart-mode" data-mode="month" class="' + (ui.incomeChartMode === 'month' ? 'active' : '') + '">按月</button><button type="button" data-action="income-chart-mode" data-mode="cumulative" class="' + (ui.incomeChartMode === 'cumulative' ? 'active' : '') + '">累计</button></div>';
     }
 
-    var progress = (p.type === 'fixed' || p.type === 'income') ? progressCardHTML(p, st) : (p.type === 'item' ? itemMilestonesHTML(p, st) : '');
+    var progress = p.type === 'fixed' ? progressCardHTML(p, st) : (p.type === 'item' ? itemMilestonesHTML(p, st) : '');
     var recordsTitle = p.type === 'item' ? '分摊信息' : (p.type === 'bill' ? '账单明细' : (isIncome ? '收入明细' : '支出明细'));
     var recordsSub = p.type === 'item' ? '按使用天数实时计算' : ((p.entries || []).length + ' 条记录');
     var noteHtml = p.note ? '<div class="mini-note">' + icon('i-edit') + '<span>' + esc(p.note) + '</span></div>' : '';
 
     return '<section class="detail-hero type-' + p.type + '">' +
-        '<div class="detail-kicker">' + icon(t.icon) + '<span>' + t.label + '</span><span class="type-dot"></span><span>' + (p.type === 'item' ? '按天分摊' : p.type === 'bill' ? BILL_CYCLES[p.cycle] : cycleText(p.cycle) + ' · ' + (p.type === 'income' ? (p.incomeKind === 'other' ? '其他收入' : '工资') : '固定金额')) + '</span></div>' +
+        '<div class="detail-kicker">' + icon(t.icon) + '<span>' + t.label + '</span><span class="type-dot"></span><span>' + (p.type === 'item' ? '按天分摊' : p.type === 'bill' ? BILL_CYCLES[p.cycle] : p.type === 'income' ? ((p.incomeKind === 'other' ? '其他收入' : '工资') + ' · 逐笔记录') : (cycleText(p.cycle) + ' · 固定金额')) + '</span></div>' +
         '<div class="detail-name">' + esc(p.name) + '</div>' +
         (p.note ? '<div class="detail-note">' + esc(p.note) + '</div>' : '') +
         '<div class="detail-big"><strong>' + heroBig + '</strong><span class="big-unit">' + heroUnit + '</span></div>' +
@@ -1625,10 +1676,11 @@
       d.purchaseDate = p.purchaseDate;
     } else if (p.type === 'bill') {
       d.cycle = p.cycle || 'month';
-    } else {
+    } else if (p.type === 'fixed') {
       d.amount = String(p.amount);
       d.startDate = p.startDate;
       d.cycle = p.cycle;
+    } else {
       d.incomeKind = p.incomeKind || 'salary';
     }
     return d;
@@ -1690,13 +1742,13 @@
     } else if (type === 'bill') {
       fields += selectField('计费周期', 'cycle', d.cycle, Object.keys(BILL_CYCLES).map(function (k) { return { value: k, label: BILL_CYCLES[k] }; }));
       fields += '<div class="field-hint" style="margin-top:6px">周期只用于统计均值和展示，账单仍按每笔实际日期记录。</div>';
-    } else {
-      fields += formField(type === 'income' ? '每期收入' : '每期支出', 'amount', d.amount, { type: 'number', prefix: '¥', placeholder: '例如 ' + (type === 'income' ? '18000' : '4200'), hint: '按固定周期记录，首页会显示已进行期数和累计金额。' });
+    } else if (type === 'fixed') {
+      fields += formField('每期支出', 'amount', d.amount, { type: 'number', prefix: '¥', placeholder: '例如 4200', hint: '按固定周期记录，首页会显示已进行期数和累计金额。' });
       fields += formField('开始日期', 'startDate', d.startDate, { type: 'date' });
       fields += selectField('周期', 'cycle', d.cycle, Object.keys(CYCLES).map(function (k) { return { value: k, label: CYCLES[k].label }; }));
-      if (type === 'income') {
-        fields += selectField('收入性质', 'incomeKind', d.incomeKind, [{ value: 'salary', label: '工资' }, { value: 'other', label: '其他收入' }]);
-      }
+    } else {
+      fields += selectField('收入性质', 'incomeKind', d.incomeKind, [{ value: 'salary', label: '工资' }, { value: 'other', label: '其他收入' }]);
+      fields += '<div class="field-hint" style="margin-top:6px">收入不设固定金额。每月到账多少，就在项目里逐笔记多少，金额可以有差异。</div>';
     }
     fields += formField('备注', 'note', d.note, { textarea: true, optional: '可选', placeholder: '写点说明，例如：公司配的电脑 / 房租押一付三', maxlength: 120, hint: '' });
 
@@ -1798,7 +1850,7 @@
       if (!BILL_CYCLES[d.cycle]) { showProjectError('请选择计费周期'); return; }
       p.cycle = d.cycle;
       if (!p.entries) p.entries = [];
-    } else {
+    } else if (type === 'fixed') {
       var amount = num(d.amount);
       if (!isFinite(amount) || amount <= 0) { showProjectError('请输入大于 0 的每期金额'); return; }
       if (!validISO(d.startDate)) { showProjectError('请选择开始日期'); return; }
@@ -1806,8 +1858,13 @@
       p.amount = round2(amount);
       p.startDate = d.startDate;
       p.cycle = d.cycle;
-      if (type === 'income') p.incomeKind = d.incomeKind === 'other' ? 'other' : 'salary';
       if (!p.entries) p.entries = [];
+    } else {
+      p.incomeKind = d.incomeKind === 'other' ? 'other' : 'salary';
+      if (!p.entries) p.entries = [];
+      delete p.amount;
+      delete p.startDate;
+      delete p.cycle;
     }
     if (!existing) {
       data.projects.push(p);
@@ -1833,7 +1890,7 @@
   /* ------------------------------------------------------------------ */
 
   function defaultEntryDate(p) {
-    if (p.type === 'fixed' || p.type === 'income') {
+    if (p.type === 'fixed') {
       var due = dueDates(p);
       if (due.length) return due[due.length - 1];
     }
@@ -1851,18 +1908,24 @@
     ui.entryId = entry ? entry.id : null;
     var isEdit = !!entry;
     var st = projectStats(p);
-    var amount = entry ? String(entry.amount) : (p.type === 'bill' ? '' : String(p.amount));
+    var amount = entry ? String(entry.amount) : ((p.type === 'bill' || p.type === 'income') ? '' : String(p.amount));
     var date = entry ? entry.date : defaultEntryDate(p);
     var note = entry ? entry.note : '';
     var isIncome = p.type === 'income';
-    var quick = p.type === 'bill'
-      ? [50, 100, 200, 500]
-      : [p.amount, p.amount * 2, p.amount * 3, p.amount * 6];
+    var quick;
+    if (p.type === 'bill') {
+      quick = [50, 100, 200, 500];
+    } else if (p.type === 'fixed') {
+      quick = [p.amount, p.amount * 2, p.amount * 3, p.amount * 6];
+    } else {
+      var base = st.latest ? st.latest.amount : 5000;
+      quick = [base, round2(base * 1.1), round2(base * 0.9), round2(base * 1.2)];
+    }
     var quickHtml = quick.filter(function (v, i, arr) { return arr.indexOf(v) === i && v > 0; }).map(function (v) {
       return '<button type="button" data-action="set-entry-amount" data-amount="' + v + '">' + money(v) + '</button>';
     }).join('');
     var planHint = '';
-    if (p.type === 'fixed' || p.type === 'income') {
+    if (p.type === 'fixed') {
       planHint = '<div class="field-hint">计划每期 ' + money(p.amount) + ' · ' + cycleText(p.cycle) + ' · 已进行 ' + st.periods + ' 期' + (st.missing ? ' · 待记 ' + st.missing + ' 期' : '') + '</div>';
     }
     var el = pushOverlay(
@@ -2384,6 +2447,10 @@
         break;
       case 'bill-chart-mode':
         ui.billChartMode = el.getAttribute('data-mode') === 'month' ? 'month' : 'entry';
+        refreshDetail();
+        break;
+      case 'income-chart-mode':
+        ui.incomeChartMode = el.getAttribute('data-mode') === 'cumulative' ? 'cumulative' : 'month';
         refreshDetail();
         break;
       case 'recurring-chart-mode':
