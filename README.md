@@ -2,6 +2,8 @@
 
 一个完全离线的安卓 App，用来记录高价物品、周期账单、固定支出和收入。数据只保存在手机本地。
 
+开源地址：[github.com/bao0541/riji](https://github.com/bao0541/riji) · [Releases](https://github.com/bao0541/riji/releases)
+
 ![首页](docs/home.png)
 ![项目详情](docs/detail.png)
 ![收支分析·折线](docs/analysis.png)
@@ -27,7 +29,7 @@
 
 ## 安装到安卓手机
 
-1. 从 GitHub Releases 下载最新 APK（或使用本地构建产生的 `dist/日计-v1.4.0.apk`），传到手机（数据线、微信文件传输、网盘均可）。
+1. 从 [GitHub Releases](https://github.com/bao0541/riji/releases) 下载最新 APK（或使用本地构建产生的 `dist/日计-v1.4.0.apk`），传到手机（数据线、微信文件传输、网盘均可）。
 2. 在手机上点开 APK。
 3. 如果系统提示“不允许安装未知来源应用”，按提示允许当前文件管理器 / 浏览器安装。
 4. 如出现 Play Protect 提示，选择“仍要安装”。这是个人签名包，不在应用商店上架。
@@ -97,7 +99,8 @@ WebView localStorage 默认不会像 Cookie 那样自动过期，但它依赖 We
 需要 JDK 17、Android SDK Build-Tools 34、Platform 34。
 
 ```powershell
-# 在仓库根目录
+git clone https://github.com/bao0541/riji.git
+cd riji
 .\build.ps1 -SdkRoot "C:\path\to\android-sdk" -JavaHome "C:\path\to\jdk-17"
 ```
 
@@ -126,6 +129,8 @@ WebView localStorage 默认不会像 Cookie 那样自动过期，但它依赖 We
 ## License
 
 [MIT](LICENSE) © 2026 Tongbo
+
+如果这个项目对你有帮助，欢迎在 [GitHub](https://github.com/bao0541/riji) 点一个 Star。
 
 ## 计算口径
 
