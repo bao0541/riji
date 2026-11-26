@@ -2,7 +2,7 @@
   'use strict';
 
   var STORAGE_KEY = 'riji.data.v1';
-  var APP_VERSION = '1.5.0';
+  var APP_VERSION = '1.6.0';
   var storageMigrated = false;
   var TYPES = {
     item: {
@@ -47,6 +47,8 @@
   ];
 
   var data = loadData();
+  var dragState = null;
+  var suppressClickUntil = 0;
   var ui = {
     tab: 'home',
     filter: 'all',
@@ -68,6 +70,7 @@
     formDraft: {},
     entryProjectId: null,
     entryId: null,
+    datePicker: null,
     dialogEl: null,
     pendingConfirm: null,
     toastTimer: null
@@ -311,7 +314,7 @@
   /* 数据存取与结构清洗                                                   */
   /* ------------------------------------------------------------------ */
 
-  function defaultData() { return { version: 1, projects: [] }; }
+  function defaultData() { return { version: 1, projects: [], order: [] }; }
 
   function readLocalRaw() {
     try { return localStorage.getItem(STORAGE_KEY) || ''; } catch (e) { return ''; }
@@ -433,6 +436,29 @@
       }
       out.projects.push(base);
     });
+    var byId = {};
+    out.projects.forEach(function (p) { byId[p.id] = p; });
+    var ordered = [];
+    var seenOrder = {};
+    if (Array.isArray(raw.order)) {
+      raw.order.forEach(function (id) {
+        id = String(id);
+        if (byId[id] && !seenOrder[id]) {
+          ordered.push(id);
+          seenOrder[id] = true;
+        }
+      });
+    }
+    if (!ordered.length) {
+      out.projects.slice().sort(function (a, b) {
+        return (b.updatedAt || 0) - (a.updatedAt || 0);
+      }).forEach(function (p) { ordered.push(p.id); });
+    } else {
+      out.projects.forEach(function (p) {
+        if (!seenOrder[p.id]) ordered.push(p.id);
+      });
+    }
+    out.order = ordered;
     return out;
   }
 
@@ -574,7 +600,25 @@
     return data.projects.reduce(function (n, p) { return n + (p.entries ? p.entries.length : 0); }, 0);
   }
   function sortedProjects() {
-    return data.projects.slice().sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); });
+    var byId = {};
+    data.projects.forEach(function (p) { byId[p.id] = p; });
+    var out = [];
+    var seen = {};
+    (data.order || []).forEach(function (id) {
+      if (byId[id] && !seen[id]) {
+        out.push(byId[id]);
+        seen[id] = true;
+      }
+    });
+    data.projects.slice().sort(function (a, b) {
+      return (b.updatedAt || 0) - (a.updatedAt || 0);
+    }).forEach(function (p) {
+      if (!seen[p.id]) {
+        out.push(p);
+        seen[p.id] = true;
+      }
+    });
+    return out;
   }
 
   /* ------------------------------------------------------------------ */
@@ -878,10 +922,141 @@
       '<div class="section-head"><div class="section-title">我的项目<small>' + projects.length + ' 个</small></div>' +
         '<button class="btn btn-primary btn-sm" type="button" data-action="open-project-form">' + icon('i-plus') + '新增</button></div>' +
       '<div class="filters">' + filters + '</div>' +
+      (projects.length && ui.filter === 'all' ? '<div class="sort-hint">' + icon('i-repeat') + '<span>长按项目可拖动排序</span></div>' : '') +
       listHtml +
       (projects.length ? '<div class="tip-card">' + icon('i-info') + '<div><b>小提示：</b>点“新增”可以随时添加物品、账单、固定支出或收入。数据只保存在这台手机上。</div></div>' : '');
 
     updateChrome();
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 首页长按拖动排序                                                     */
+  /* ------------------------------------------------------------------ */
+
+  function clearDragTimer() {
+    if (dragState && dragState.timer) {
+      clearTimeout(dragState.timer);
+      dragState.timer = null;
+    }
+  }
+
+  function activateDrag() {
+    if (!dragState || dragState.active) return;
+    var el = dragState.el;
+    if (!el || !el.isConnected) { cancelDrag(); return; }
+    var rect = el.getBoundingClientRect();
+    if (!rect.width || !rect.height) { cancelDrag(); return; }
+    var ghost = el.cloneNode(true);
+    ghost.classList.add('drag-ghost');
+    ghost.removeAttribute('data-action');
+    ghost.setAttribute('aria-hidden', 'true');
+    ghost.style.width = rect.width + 'px';
+    ghost.style.height = rect.height + 'px';
+    ghost.style.left = rect.left + 'px';
+    ghost.style.top = rect.top + 'px';
+    document.body.appendChild(ghost);
+    el.classList.add('drag-original');
+    var list = el.closest('.project-list');
+    if (list) list.classList.add('dragging');
+    document.body.classList.add('is-dragging-project');
+    dragState.ghost = ghost;
+    dragState.offsetX = dragState.startX - rect.left;
+    dragState.offsetY = dragState.startY - rect.top;
+    dragState.active = true;
+    if (navigator.vibrate) {
+      try { navigator.vibrate(12); } catch (e) {}
+    }
+  }
+
+  function moveDrag(e) {
+    if (!dragState) return;
+    if (!dragState.active) {
+      var dx = Math.abs(e.clientX - dragState.startX);
+      var dy = Math.abs(e.clientY - dragState.startY);
+      if (dx > 8 || dy > 8) {
+        cancelDrag();
+      }
+      return;
+    }
+    e.preventDefault();
+    if (dragState.ghost) {
+      dragState.ghost.style.left = (e.clientX - dragState.offsetX) + 'px';
+      dragState.ghost.style.top = (e.clientY - dragState.offsetY) + 'px';
+    }
+    if (e.clientY < 90) window.scrollBy(0, -8);
+    else if (e.clientY > window.innerHeight - 130) window.scrollBy(0, 8);
+
+    var hit = document.elementFromPoint(e.clientX, e.clientY);
+    var target = hit && hit.closest ? hit.closest('.project-card') : null;
+    if (!target || target === dragState.el) return;
+    if (!target.closest('#home-content')) return;
+    var targetRect = target.getBoundingClientRect();
+    var before = e.clientY < targetRect.top + targetRect.height / 2;
+    if (before) {
+      target.parentNode.insertBefore(dragState.el, target);
+    } else {
+      target.parentNode.insertBefore(dragState.el, target.nextSibling);
+    }
+  }
+
+  function persistProjectOrderFromDom() {
+    var ids = [];
+    document.querySelectorAll('#home-content .project-card').forEach(function (el) {
+      if (el.dataset.id) ids.push(el.dataset.id);
+    });
+    var all = data.projects.map(function (p) { return p.id; });
+    data.order = ids.concat(all.filter(function (id) { return ids.indexOf(id) === -1; }));
+    saveData();
+  }
+
+  function finishDrag() {
+    if (!dragState) return;
+    clearDragTimer();
+    var wasActive = dragState.active;
+    if (dragState.ghost) dragState.ghost.remove();
+    if (dragState.el) {
+      dragState.el.classList.remove('drag-original');
+      var list = dragState.el.closest('.project-list');
+      if (list) list.classList.remove('dragging');
+    }
+    document.body.classList.remove('is-dragging-project');
+    dragState = null;
+    if (wasActive) {
+      persistProjectOrderFromDom();
+      suppressClickUntil = Date.now() + 500;
+      toast('排序已保存');
+    }
+  }
+
+  function cancelDrag() {
+    if (!dragState) return;
+    clearDragTimer();
+    if (dragState.ghost) dragState.ghost.remove();
+    if (dragState.el) {
+      dragState.el.classList.remove('drag-original');
+      var list = dragState.el.closest('.project-list');
+      if (list) list.classList.remove('dragging');
+    }
+    document.body.classList.remove('is-dragging-project');
+    dragState = null;
+  }
+
+  function onProjectPointerDown(e) {
+    if (ui.tab !== 'home' || ui.overlays.length) return;
+    if (e.button != null && e.button !== 0) return;
+    var card = e.target.closest ? e.target.closest('.project-card') : null;
+    if (!card || !card.closest('#home-content')) return;
+    if (ui.filter !== 'all') return;
+    if (dragState) return;
+    dragState = {
+      el: card, id: card.dataset.id,
+      startX: e.clientX, startY: e.clientY,
+      pointerId: e.pointerId,
+      active: false, ghost: null,
+      offsetX: 0, offsetY: 0,
+      timer: null
+    };
+    dragState.timer = setTimeout(activateDrag, 420);
   }
 
   /* ------------------------------------------------------------------ */
@@ -1696,6 +1871,107 @@
     }).join('');
   }
 
+  function openDatePicker(inputId) {
+    var input = document.getElementById(inputId);
+    if (!input) return;
+    var selected = parseISO(input.value) || parseISO(todayISO());
+    var minDate = input.dataset.min ? parseISO(input.dataset.min) : null;
+    var maxDate = input.dataset.max ? parseISO(input.dataset.max) : null;
+    var minYear = minDate ? minDate.getFullYear() : 1990;
+    var maxYear = maxDate ? maxDate.getFullYear() : new Date().getFullYear() + 1;
+    minYear = Math.min(minYear, selected.getFullYear());
+    maxYear = Math.max(maxYear, selected.getFullYear());
+    var yearOptions = '';
+    for (var y = maxYear; y >= minYear; y--) {
+      yearOptions += '<option value="' + y + '" ' + (y === selected.getFullYear() ? 'selected' : '') + '>' + y + ' 年</option>';
+    }
+    var monthOptions = '';
+    for (var m = 1; m <= 12; m++) {
+      monthOptions += '<option value="' + m + '" ' + (m === selected.getMonth() + 1 ? 'selected' : '') + '>' + m + ' 月</option>';
+    }
+    ui.datePicker = {
+      inputId: inputId,
+      min: input.dataset.min || '',
+      max: input.dataset.max || ''
+    };
+    var overlay = pushOverlay(
+      '<div class="overlay" data-overlay="date-picker">' +
+        '<div class="overlay-backdrop" data-action="close-overlay"></div>' +
+        '<div class="overlay-panel sheet-panel date-panel">' +
+          '<div class="sheet-grab"></div>' +
+          '<div class="sheet-head"><h2>选择日期</h2><button class="icon-btn" type="button" data-action="close-overlay" aria-label="关闭">' + icon('i-close') + '</button></div>' +
+          '<div class="overlay-body">' +
+            '<div class="date-preview" id="date-preview"></div>' +
+            '<div class="date-selects">' +
+              '<label>年<select data-date-part="year">' + yearOptions + '</select></label>' +
+              '<label>月<select data-date-part="month">' + monthOptions + '</select></label>' +
+              '<label>日<select data-date-part="day"></select></label>' +
+            '</div>' +
+            '<div class="field-hint">可以直接选择年份和月份，适合补录较早的记录。</div>' +
+            '<div class="date-picker-actions">' +
+              '<button class="btn btn-soft" type="button" data-action="date-picker-today">今天</button>' +
+              '<button class="btn btn-primary" type="button" data-action="date-picker-apply">确定</button>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>'
+    );
+    syncDatePicker(overlay, selected.getFullYear(), selected.getMonth() + 1, selected.getDate());
+  }
+
+  function syncDatePicker(overlay, year, month, day) {
+    if (!overlay) return;
+    var ySel = overlay.querySelector('[data-date-part="year"]');
+    var mSel = overlay.querySelector('[data-date-part="month"]');
+    var dSel = overlay.querySelector('[data-date-part="day"]');
+    var y = year || parseInt(ySel.value, 10);
+    var m = month || parseInt(mSel.value, 10);
+    var maxDay = new Date(y, m, 0).getDate();
+    var d = Math.min(day || parseInt(dSel.value, 10) || 1, maxDay);
+    var dayOptions = '';
+    for (var i = 1; i <= maxDay; i++) {
+      dayOptions += '<option value="' + i + '" ' + (i === d ? 'selected' : '') + '>' + i + ' 日</option>';
+    }
+    dSel.innerHTML = dayOptions;
+    ySel.value = y;
+    mSel.value = m;
+    var preview = overlay.querySelector('#date-preview');
+    if (preview) preview.textContent = dateDisplay(y + '-' + pad2(m) + '-' + pad2(d));
+  }
+
+  function applyDatePicker() {
+    var overlay = document.querySelector('[data-overlay="date-picker"]');
+    if (!overlay || !ui.datePicker) return;
+    var y = parseInt(overlay.querySelector('[data-date-part="year"]').value, 10);
+    var m = parseInt(overlay.querySelector('[data-date-part="month"]').value, 10);
+    var d = parseInt(overlay.querySelector('[data-date-part="day"]').value, 10);
+    var iso = y + '-' + pad2(m) + '-' + pad2(d);
+    var adjusted = false;
+    if (ui.datePicker.max && iso > ui.datePicker.max) { iso = ui.datePicker.max; adjusted = true; }
+    if (ui.datePicker.min && iso < ui.datePicker.min) { iso = ui.datePicker.min; adjusted = true; }
+    var input = document.getElementById(ui.datePicker.inputId);
+    if (input) {
+      input.value = iso;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    var display = document.querySelector('[data-action="open-date-picker"][data-input="' + ui.datePicker.inputId + '"]');
+    if (display) display.textContent = dateDisplay(iso);
+    ui.datePicker = null;
+    closeTopOverlay();
+    if (adjusted) toast('已调整为可选范围内最接近的日期');
+  }
+
+  function todayInDatePicker() {
+    var overlay = document.querySelector('[data-overlay="date-picker"]');
+    if (!overlay || !ui.datePicker) return;
+    var iso = todayISO();
+    if (ui.datePicker.max && iso > ui.datePicker.max) iso = ui.datePicker.max;
+    if (ui.datePicker.min && iso < ui.datePicker.min) iso = ui.datePicker.min;
+    var d = parseISO(iso);
+    syncDatePicker(overlay, d.getFullYear(), d.getMonth() + 1, d.getDate());
+  }
+
   function formField(label, name, value, opts) {
     opts = opts || {};
     var input = opts.textarea
@@ -1718,6 +1994,26 @@
       }).join('') + '</select></span></div></div>';
   }
 
+  function dateDisplay(value) {
+    var d = parseISO(value);
+    return d ? d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日' : '选择日期';
+  }
+
+  function dateField(label, name, value, opts) {
+    opts = opts || {};
+    var v = validISO(value) ? value : todayISO();
+    return '<div class="form-section"><label class="form-label">' + label + '</label>' +
+      '<div class="field date-field">' +
+        '<input id="field-' + name + '" type="hidden" data-field="' + name + '" value="' + esc(v) + '"' +
+          (opts.max ? ' data-max="' + esc(opts.max) + '"' : '') +
+          (opts.min ? ' data-min="' + esc(opts.min) + '"' : '') + '>' +
+        '<button class="date-display" type="button" data-action="open-date-picker" data-input="field-' + name + '">' + dateDisplay(v) + '</button>' +
+        '<span class="date-icon">' + icon('i-calendar') + '</span>' +
+      '</div>' +
+      (opts.hint ? '<div class="field-hint">' + opts.hint + '</div>' : '') +
+    '</div>';
+  }
+
   function paintProjectForm() {
     var overlay = document.querySelector('[data-overlay="project-form"]');
     if (!overlay) return;
@@ -1738,13 +2034,13 @@
     var fields = '';
     if (type === 'item') {
       fields += formField('价格', 'price', d.price, { type: 'number', prefix: '¥', placeholder: '例如 4999', hint: '日分摊 = 价格 ÷ 已使用天数，每天自动更新。' });
-      fields += formField('购买日期', 'purchaseDate', d.purchaseDate, { type: 'date', max: todayISO() });
+      fields += dateField('购买日期', 'purchaseDate', d.purchaseDate, { max: todayISO() });
     } else if (type === 'bill') {
       fields += selectField('计费周期', 'cycle', d.cycle, Object.keys(BILL_CYCLES).map(function (k) { return { value: k, label: BILL_CYCLES[k] }; }));
       fields += '<div class="field-hint" style="margin-top:6px">周期只用于统计均值和展示，账单仍按每笔实际日期记录。</div>';
     } else if (type === 'fixed') {
       fields += formField('每期支出', 'amount', d.amount, { type: 'number', prefix: '¥', placeholder: '例如 4200', hint: '按固定周期记录，首页会显示已进行期数和累计金额。' });
-      fields += formField('开始日期', 'startDate', d.startDate, { type: 'date' });
+      fields += dateField('开始日期', 'startDate', d.startDate, {});
       fields += selectField('周期', 'cycle', d.cycle, Object.keys(CYCLES).map(function (k) { return { value: k, label: CYCLES[k].label }; }));
     } else {
       fields += selectField('收入性质', 'incomeKind', d.incomeKind, [{ value: 'salary', label: '工资' }, { value: 'other', label: '其他收入' }]);
@@ -1868,6 +2164,8 @@
     }
     if (!existing) {
       data.projects.push(p);
+      data.order = (data.order || []).filter(function (id) { return id !== p.id; });
+      data.order.unshift(p.id);
       ui.filter = 'all';
     }
     p.updatedAt = Date.now();
@@ -1941,10 +2239,12 @@
                 '<div class="field"><span class="prefix">¥</span><input id="entry-amount" data-entry-field="amount" type="number" inputmode="decimal" step="0.01" min="0" value="' + esc(amount) + '" placeholder="0.00"></div>' +
                 '<div class="quick-amounts">' + quickHtml + '</div>' + planHint +
               '</div>' +
-              '<div class="form-section"><label class="form-label" for="entry-date">日期</label>' +
-                '<div class="field"><input id="entry-date" data-entry-field="date" type="date" value="' + esc(date) + '" max="' + todayISO() + '"></div></div>' +
+              '<div class="form-section"><label class="form-label">日期</label>' +
+                '<div class="field date-field"><input id="entry-date" data-entry-field="date" type="hidden" value="' + esc(date) + '" data-max="' + todayISO() + '">' +
+                  '<button class="date-display" type="button" data-action="open-date-picker" data-input="entry-date">' + dateDisplay(date) + '</button>' +
+                  '<span class="date-icon">' + icon('i-calendar') + '</span></div></div>' +
               '<div class="form-section"><label class="form-label" for="entry-note">备注 <span class="optional">可选</span></label>' +
-                '<div class="field"><input id="entry-note" data-entry-field="note" value="' + esc(note) + '" maxlength="80" placeholder="例如：11 月电费 / 补发"></div></div>' +
+                '<div class="field"><textarea id="entry-note" data-entry-field="note" maxlength="80" rows="2" placeholder="例如：11 月电费 / 补发">' + esc(note) + '</textarea></div></div>' +
               '<div id="entry-error" class="form-error"></div>' +
               '<div class="form-actions"><button class="btn btn-soft" type="button" data-action="close-overlay">取消</button>' +
                 '<button class="btn btn-primary" type="submit">' + (isEdit ? '保存修改' : '保存记录') + '</button></div>' +
@@ -2060,6 +2360,7 @@
     if (kind === 'detail') ui.detailId = null;
     if (kind === 'project-form') { ui.formProjectId = null; ui.formDraft = {}; }
     if (kind === 'entry') { ui.entryProjectId = null; ui.entryId = null; }
+    if (kind === 'date-picker') ui.datePicker = null;
     if (!ui.overlays.length) document.body.classList.remove('locked');
     updateChrome();
     return true;
@@ -2145,6 +2446,7 @@
     var count = (p.entries || []).length;
     showConfirm('删除这个项目', '将删除「' + p.name + '」' + (count ? '及 ' + count + ' 条记录' : '') + '，操作无法恢复。', '删除项目', true, function () {
       data.projects = data.projects.filter(function (x) { return x.id !== projectId; });
+      data.order = (data.order || []).filter(function (id) { return id !== projectId; });
       saveData();
       closeAllOverlays();
       refreshAll();
@@ -2183,6 +2485,7 @@
     var text = JSON.stringify({
       version: 1,
       exportedAt: new Date().toISOString(),
+      order: data.order || [],
       projects: data.projects
     }, null, 2);
     pushOverlay(
@@ -2345,6 +2648,7 @@
     showConfirm('载入示例数据', '会追加 8 个示例项目（物品、账单、房租、保险、工资等），不会删除你已有的数据。示例可以随时删除。', '载入示例', false, function () {
       var demo = buildDemoProjects();
       data.projects = data.projects.concat(demo);
+      data.order = demo.map(function (p) { return p.id; }).concat(data.order || []);
       saveData();
       closeAllOverlays();
       refreshAll();
@@ -2419,6 +2723,15 @@
           amountInput.value = el.getAttribute('data-amount');
           amountInput.focus();
         }
+        break;
+      case 'open-date-picker':
+        openDatePicker(el.getAttribute('data-input'));
+        break;
+      case 'date-picker-apply':
+        applyDatePicker();
+        break;
+      case 'date-picker-today':
+        todayInDatePicker();
         break;
       case 'set-filter':
         ui.filter = el.getAttribute('data-filter');
@@ -2502,7 +2815,23 @@
     }
   }
 
+  document.addEventListener('pointerdown', onProjectPointerDown, { passive: true });
+  document.addEventListener('pointermove', moveDrag, { passive: false });
+  document.addEventListener('pointerup', finishDrag, { passive: true });
+  document.addEventListener('pointercancel', cancelDrag, { passive: true });
+  document.addEventListener('touchmove', function (e) {
+    if (dragState && dragState.active) e.preventDefault();
+  }, { passive: false });
+  document.addEventListener('contextmenu', function (e) {
+    if (e.target.closest && e.target.closest('.project-card')) e.preventDefault();
+  });
+
   document.addEventListener('click', function (e) {
+    if (Date.now() < suppressClickUntil) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     var tabEl = e.target.closest('[data-tab]');
     if (tabEl) {
       e.preventDefault();
@@ -2516,6 +2845,11 @@
   });
 
   document.addEventListener('change', function (e) {
+    if (e.target.matches && e.target.matches('[data-date-part]')) {
+      var dateOverlay = e.target.closest('[data-overlay="date-picker"]');
+      if (dateOverlay) syncDatePicker(dateOverlay);
+      return;
+    }
     var yearSelect = e.target.closest('[data-analysis-year]');
     if (yearSelect) {
       ui.analysisYear = parseInt(yearSelect.value, 10) || new Date().getFullYear();

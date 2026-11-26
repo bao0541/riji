@@ -131,8 +131,13 @@ body.locked { overflow: hidden; height: 100vh; }
 .chip:active { transform: scale(.97); }
 
 /* ---------- project list ---------- */
+.sort-hint { display: flex; align-items: center; gap: 5px; color: var(--muted-2); font-size: 10.5px; margin: -4px 2px 10px; }
+.sort-hint .icon { width: 13px; height: 13px; }
 .project-list { display: flex; flex-direction: column; gap: 11px; }
 .project-card {
+  touch-action: pan-y;
+  -webkit-user-select: none;
+  user-select: none;
   position: relative;
   display: block; width: 100%; text-align: left;
   background: var(--surface); border: 1px solid rgba(23, 35, 30, .055);
@@ -142,6 +147,16 @@ body.locked { overflow: hidden; height: 100vh; }
   overflow: hidden;
 }
 .project-card:active { transform: scale(.987); box-shadow: 0 2px 8px rgba(35,42,34,.05); }
+.project-card.drag-original { opacity: .16; transform: scale(.985); }
+.project-list.dragging .project-card:not(.drag-original) { transition: transform .16s ease; }
+.drag-ghost {
+  position: fixed !important; z-index: 260 !important; margin: 0 !important;
+  pointer-events: none !important; opacity: .97;
+  transform: scale(1.025);
+  box-shadow: 0 22px 48px rgba(23,35,30,.24) !important;
+  border-color: rgba(30,90,73,.2) !important;
+}
+body.is-dragging-project { cursor: grabbing; }
 .project-card::after { content: ""; position: absolute; left: 0; top: 18px; bottom: 18px; width: 3px; border-radius: 0 4px 4px 0; background: var(--type-color, var(--green)); opacity: .8; }
 .project-top { display: flex; align-items: flex-start; gap: 11px; }
 .type-icon { width: 40px; height: 40px; border-radius: 13px; display: grid; place-items: center; color: var(--type-color, var(--green)); background: var(--type-soft, var(--green-soft)); flex: 0 0 auto; }
@@ -448,6 +463,11 @@ body.locked { overflow: hidden; height: 100vh; }
 .field:focus-within { border-color: rgba(30,90,73,.5); box-shadow: 0 0 0 3px rgba(30,90,73,.08); }
 .field .prefix { color: var(--muted); font-size: 15px; font-weight: 500; flex: 0 0 auto; }
 .field input, .field select, .field textarea { width: 100%; min-width: 0; border: 0; background: transparent; font-size: 16px; font-weight: 500; padding: 12px 0; }
+.field input[type="hidden"] { display: none; }
+.date-field { gap: 7px; }
+.date-display { flex: 1; min-height: 46px; text-align: left; font-size: 16px; font-weight: 500; color: var(--ink); }
+.date-icon { color: var(--muted); flex: 0 0 auto; display: grid; place-items: center; }
+.date-icon .icon { width: 19px; height: 19px; }
 .field textarea { resize: none; min-height: 72px; line-height: 1.6; font-size: 14px; font-weight: 400; }
 .field select { appearance: none; -webkit-appearance: none; background: transparent; }
 .field .select-wrap { position: relative; width: 100%; }
@@ -483,6 +503,12 @@ body.locked { overflow: hidden; height: 100vh; }
 .quick-amounts::-webkit-scrollbar { display: none; }
 .quick-amounts button { flex: 0 0 auto; min-height: 32px; padding: 0 11px; border-radius: 9px; background: var(--surface-2); border: 1px solid var(--line); color: var(--muted); font-size: 11.5px; font-weight: 500; }
 .quick-amounts button:active { background: var(--green-soft); color: var(--green); }
+.date-preview { text-align: center; font-size: 24px; font-weight: 650; letter-spacing: -.04em; padding: 6px 0 18px; font-variant-numeric: tabular-nums; }
+.date-selects { display: grid; grid-template-columns: 1.15fr 1fr 1fr; gap: 9px; }
+.date-selects label { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 10.5px; font-weight: 600; }
+.date-selects select { width: 100%; min-height: 48px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); padding: 0 10px; font-size: 15px; font-weight: 600; color: var(--ink); appearance: none; -webkit-appearance: none; text-align: center; }
+.date-picker-actions { display: flex; gap: 9px; margin-top: 20px; }
+.date-picker-actions .btn { flex: 1; height: 48px; border-radius: 14px; }
 .form-actions { margin-top: 22px; display: flex; gap: 9px; }
 .form-actions .btn { flex: 1; height: 49px; border-radius: 15px; }
 .form-delete { margin-top: 25px; padding-top: 16px; border-top: 1px solid var(--line); text-align: center; }
